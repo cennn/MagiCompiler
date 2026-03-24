@@ -66,8 +66,8 @@ For memory-constrained setups, our built-in **selective offloading policy** perf
 #### ♻️ 4. Heuristic Activation Recomputation
 Say goodbye to manual `torch.utils.checkpoint`. MagiCompiler automatically saves compute-bound ops (e.g., MatMul, Attention) and recomputes memory-bound ones, slashing peak memory without sacrificing throughput.
 
-#### 🛠 5. Better Interpretability
-Toggle `MAGI_ENABLE_FX_GRAPH_VIZ=1` and let our powerful introspection toolchain do the rest. All implicit artifacts from graphs to kernels are automatically dumped as human-readable files, making compiler debugging highly accessible.
+#### 🛠 5. Magi Depyf Introspection
+Meet **magi_depyf**, MagiCompiler’s native introspection toolkit. Compilation timelines, decompiled bytecode flows, split subgraphs, and backend artifacts are automatically dumped into the cache path as organized, human-readable files for easier debugging.
 
 ---
 
