@@ -56,10 +56,3 @@ COPY requirements.txt /app/
 RUN pip install -r /app/requirements.txt
 
 WORKDIR /app
-
-# nohup bash -lc 'docker build \
-#   --secret id=http_proxy,env=http_proxy \
-#   --secret id=https_proxy,env=https_proxy \
-#   -f Dockerfile.magi_compiler.base \
-#   -t sandai/magi-compiler:latest \
-#   .' > magi-compiler-build.log 2>&1 &
