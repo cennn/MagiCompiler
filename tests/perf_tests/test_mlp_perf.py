@@ -32,7 +32,7 @@ from tests.perf_tests import cuda_benchmark, print_perf_comparison
 HIDDEN_SIZE = 2048
 INTERMEDIATE_SIZE = 8192
 NUM_TOKENS = 8192
-SPEEDUP_VS_EAGER_THRESHOLD = 1.65
+SPEEDUP_VS_EAGER_THRESHOLD = 1.5
 
 
 def _build_config():

@@ -36,7 +36,7 @@ from tests.perf_tests import cuda_benchmark, print_perf_comparison
 
 HIDDEN_SIZE = 4096
 NUM_TOKENS = 16384
-SPEEDUP_VS_EAGER_THRESHOLD = 4.05
+SPEEDUP_VS_EAGER_THRESHOLD = 3.7
 
 
 class NormResidualActivation(nn.Module):

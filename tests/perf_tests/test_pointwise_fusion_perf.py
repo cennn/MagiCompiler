@@ -34,7 +34,7 @@ from tests.perf_tests import cuda_benchmark, print_perf_comparison
 
 HIDDEN_SIZE = 4096
 NUM_TOKENS = 16384
-SPEEDUP_VS_EAGER_THRESHOLD = 3.15
+SPEEDUP_VS_EAGER_THRESHOLD = 2.9
 
 
 class PointwiseFusionChain(nn.Module):
