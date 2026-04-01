@@ -99,13 +99,7 @@ def cuda_benchmark(
             fn()
         torch.cuda.synchronize()
 
-    times = do_bench(
-        fn,
-        warmup=warmup,
-        rep=rep,
-        grad_to_none=grad_to_none,
-        return_mode="all",
-    )
+    times = do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, return_mode="all")
     return BenchmarkResult(times_ms=times)
 
 

@@ -36,11 +36,7 @@ SPEEDUP_VS_EAGER_THRESHOLD = 1.65
 
 
 def _build_config():
-    return MLPConfig(
-        hidden_size=HIDDEN_SIZE,
-        intermediate_size=INTERMEDIATE_SIZE,
-        params_dtype=torch.bfloat16,
-    )
+    return MLPConfig(hidden_size=HIDDEN_SIZE, intermediate_size=INTERMEDIATE_SIZE, params_dtype=torch.bfloat16)
 
 
 # ── Shared baselines (computed once per module) ────────────────────────
@@ -61,9 +57,7 @@ def mlp_baselines(mlp_device, mlp_input):
     """Eager and torch.compile baselines, benchmarked once for the whole module."""
     config = _build_config()
     eager_model = RawMLP(config).to(mlp_device).eval()
-    torch_compiled = torch.compile(
-        RawMLP(config).to(mlp_device).eval(), backend="inductor"
-    )
+    torch_compiled = torch.compile(RawMLP(config).to(mlp_device).eval(), backend="inductor")
     with torch.no_grad():
         eager_result = cuda_benchmark(lambda: eager_model(mlp_input))
         torch_result = cuda_benchmark(lambda: torch_compiled(mlp_input), compilation_warmup=3)
@@ -101,7 +95,9 @@ def test_mlp_class_decoration(mlp_device, mlp_input, mlp_baselines):
 
     magi_vs_eager, _ = print_perf_comparison(
         "MLP - class decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  intermediate={INTERMEDIATE_SIZE}  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "class")
@@ -113,9 +109,7 @@ def test_mlp_instance_decoration(mlp_device, mlp_input, mlp_baselines):
     eager_result, torch_result = mlp_baselines
     config = _build_config()
 
-    magi_compiled = magi_compile(
-        RawMLP(config).to(mlp_device), dynamic_arg_dims={"x": 0}
-    )
+    magi_compiled = magi_compile(RawMLP(config).to(mlp_device), dynamic_arg_dims={"x": 0})
     magi_compiled.eval()
 
     with torch.no_grad():
@@ -123,7 +117,9 @@ def test_mlp_instance_decoration(mlp_device, mlp_input, mlp_baselines):
 
     magi_vs_eager, _ = print_perf_comparison(
         "MLP - instance decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  intermediate={INTERMEDIATE_SIZE}  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "instance")
@@ -139,11 +135,7 @@ def test_mlp_instance_torch_compile_mode(mlp_device, mlp_input, mlp_baselines):
         cfg.compile_mode = CompileMode.TORCH_COMPILE
         return cfg
 
-    magi_compiled = magi_compile(
-        RawMLP(config).to(mlp_device),
-        dynamic_arg_dims={"x": 0},
-        config_patch=_tc_mode,
-    )
+    magi_compiled = magi_compile(RawMLP(config).to(mlp_device), dynamic_arg_dims={"x": 0}, config_patch=_tc_mode)
     magi_compiled.eval()
 
     with torch.no_grad():
@@ -151,7 +143,9 @@ def test_mlp_instance_torch_compile_mode(mlp_device, mlp_input, mlp_baselines):
 
     magi_vs_eager, _ = print_perf_comparison(
         "MLP - instance (TORCH_COMPILE mode)",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  intermediate={INTERMEDIATE_SIZE}  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "instance_tc")
@@ -174,7 +168,9 @@ def test_mlp_function_decoration(mlp_device, mlp_input, mlp_baselines):
 
     magi_vs_eager, _ = print_perf_comparison(
         "MLP - function decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  intermediate={INTERMEDIATE_SIZE}  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "function")
@@ -187,16 +183,16 @@ def test_mlp_method_decoration(mlp_device, mlp_input, mlp_baselines):
     config = _build_config()
 
     magi_compiled = RawMLP(config).to(mlp_device).eval()
-    magi_compiled.forward = magi_compile(
-        magi_compiled.forward, dynamic_arg_dims={"x": 0}
-    )
+    magi_compiled.forward = magi_compile(magi_compiled.forward, dynamic_arg_dims={"x": 0})
 
     with torch.no_grad():
         magi_result = cuda_benchmark(lambda: magi_compiled(mlp_input), compilation_warmup=3)
 
     magi_vs_eager, _ = print_perf_comparison(
         "MLP - method decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  intermediate={INTERMEDIATE_SIZE}  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "method")

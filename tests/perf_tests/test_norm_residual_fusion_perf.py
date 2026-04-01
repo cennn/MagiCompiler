@@ -68,9 +68,7 @@ def nra_baselines(nra_device, nra_inputs):
     """Eager and torch.compile baselines, benchmarked once for the whole module."""
     x, residual = nra_inputs
     eager_model = NormResidualActivation(HIDDEN_SIZE).to(nra_device).eval()
-    torch_compiled = torch.compile(
-        NormResidualActivation(HIDDEN_SIZE).to(nra_device).eval(), backend="inductor"
-    )
+    torch_compiled = torch.compile(NormResidualActivation(HIDDEN_SIZE).to(nra_device).eval(), backend="inductor")
     with torch.no_grad():
         eager_result = cuda_benchmark(lambda: eager_model(x, residual))
         torch_result = cuda_benchmark(lambda: torch_compiled(x, residual), compilation_warmup=3)
@@ -108,7 +106,9 @@ def test_norm_residual_class_decoration(nra_device, nra_inputs, nra_baselines):
 
     magi_vs_eager, _ = print_perf_comparison(
         "Norm+Residual+SiLU - class decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "class")
@@ -120,10 +120,7 @@ def test_norm_residual_instance_decoration(nra_device, nra_inputs, nra_baselines
     eager_result, torch_result = nra_baselines
     x, residual = nra_inputs
 
-    magi_compiled = magi_compile(
-        NormResidualActivation(HIDDEN_SIZE).to(nra_device),
-        dynamic_arg_dims={"x": 0, "residual": 0},
-    )
+    magi_compiled = magi_compile(NormResidualActivation(HIDDEN_SIZE).to(nra_device), dynamic_arg_dims={"x": 0, "residual": 0})
     magi_compiled.eval()
 
     with torch.no_grad():
@@ -131,7 +128,9 @@ def test_norm_residual_instance_decoration(nra_device, nra_inputs, nra_baselines
 
     magi_vs_eager, _ = print_perf_comparison(
         "Norm+Residual+SiLU - instance decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "instance")
@@ -148,9 +147,7 @@ def test_norm_residual_instance_torch_compile_mode(nra_device, nra_inputs, nra_b
         return cfg
 
     magi_compiled = magi_compile(
-        NormResidualActivation(HIDDEN_SIZE).to(nra_device),
-        dynamic_arg_dims={"x": 0, "residual": 0},
-        config_patch=_tc_mode,
+        NormResidualActivation(HIDDEN_SIZE).to(nra_device), dynamic_arg_dims={"x": 0, "residual": 0}, config_patch=_tc_mode
     )
     magi_compiled.eval()
 
@@ -159,7 +156,9 @@ def test_norm_residual_instance_torch_compile_mode(nra_device, nra_inputs, nra_b
 
     magi_vs_eager, _ = print_perf_comparison(
         "Norm+Residual+SiLU - instance (TORCH_COMPILE mode)",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "instance_tc")
@@ -182,7 +181,9 @@ def test_norm_residual_function_decoration(nra_device, nra_inputs, nra_baselines
 
     magi_vs_eager, _ = print_perf_comparison(
         "Norm+Residual+SiLU - function decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "function")
@@ -195,16 +196,16 @@ def test_norm_residual_method_decoration(nra_device, nra_inputs, nra_baselines):
     x, residual = nra_inputs
 
     magi_compiled = NormResidualActivation(HIDDEN_SIZE).to(nra_device).eval()
-    magi_compiled.forward = magi_compile(
-        magi_compiled.forward, dynamic_arg_dims={"x": 0, "residual": 0}
-    )
+    magi_compiled.forward = magi_compile(magi_compiled.forward, dynamic_arg_dims={"x": 0, "residual": 0})
 
     with torch.no_grad():
         magi_result = cuda_benchmark(lambda: magi_compiled(x, residual), compilation_warmup=3)
 
     magi_vs_eager, _ = print_perf_comparison(
         "Norm+Residual+SiLU - method decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})  dtype=bf16",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "method")

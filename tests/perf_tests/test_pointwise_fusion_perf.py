@@ -66,9 +66,7 @@ def pointwise_baselines(pointwise_device, pointwise_input):
     """Eager and torch.compile baselines, benchmarked once for the whole module."""
     x = pointwise_input
     eager_model = PointwiseFusionChain().to(pointwise_device).eval()
-    torch_compiled = torch.compile(
-        PointwiseFusionChain().to(pointwise_device).eval(), backend="inductor"
-    )
+    torch_compiled = torch.compile(PointwiseFusionChain().to(pointwise_device).eval(), backend="inductor")
     with torch.no_grad():
         eager_result = cuda_benchmark(lambda: eager_model(x))
         torch_result = cuda_benchmark(lambda: torch_compiled(x), compilation_warmup=3)
@@ -105,7 +103,9 @@ def test_pointwise_class_decoration(pointwise_device, pointwise_input, pointwise
 
     magi_vs_eager, _ = print_perf_comparison(
         "Pointwise - class decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "class")
@@ -116,9 +116,7 @@ def test_pointwise_instance_decoration(pointwise_device, pointwise_input, pointw
     """Pointwise chain: magi_compile(instance) decoration."""
     eager_result, torch_result = pointwise_baselines
 
-    magi_compiled = magi_compile(
-        PointwiseFusionChain().to(pointwise_device), dynamic_arg_dims={"x": 0}
-    )
+    magi_compiled = magi_compile(PointwiseFusionChain().to(pointwise_device), dynamic_arg_dims={"x": 0})
     magi_compiled.eval()
 
     with torch.no_grad():
@@ -126,7 +124,9 @@ def test_pointwise_instance_decoration(pointwise_device, pointwise_input, pointw
 
     magi_vs_eager, _ = print_perf_comparison(
         "Pointwise - instance decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "instance")
@@ -141,11 +141,7 @@ def test_pointwise_instance_torch_compile_mode(pointwise_device, pointwise_input
         cfg.compile_mode = CompileMode.TORCH_COMPILE
         return cfg
 
-    magi_compiled = magi_compile(
-        PointwiseFusionChain().to(pointwise_device),
-        dynamic_arg_dims={"x": 0},
-        config_patch=_tc_mode,
-    )
+    magi_compiled = magi_compile(PointwiseFusionChain().to(pointwise_device), dynamic_arg_dims={"x": 0}, config_patch=_tc_mode)
     magi_compiled.eval()
 
     with torch.no_grad():
@@ -153,7 +149,9 @@ def test_pointwise_instance_torch_compile_mode(pointwise_device, pointwise_input
 
     magi_vs_eager, _ = print_perf_comparison(
         "Pointwise - instance (TORCH_COMPILE mode)",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "instance_tc")
@@ -175,7 +173,9 @@ def test_pointwise_function_decoration(pointwise_device, pointwise_input, pointw
 
     magi_vs_eager, _ = print_perf_comparison(
         "Pointwise - function decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "function")
@@ -187,16 +187,16 @@ def test_pointwise_method_decoration(pointwise_device, pointwise_input, pointwis
     eager_result, torch_result = pointwise_baselines
 
     magi_compiled = PointwiseFusionChain().to(pointwise_device).eval()
-    magi_compiled.forward = magi_compile(
-        magi_compiled.forward, dynamic_arg_dims={"x": 0}
-    )
+    magi_compiled.forward = magi_compile(magi_compiled.forward, dynamic_arg_dims={"x": 0})
 
     with torch.no_grad():
         magi_result = cuda_benchmark(lambda: magi_compiled(pointwise_input), compilation_warmup=3)
 
     magi_vs_eager, _ = print_perf_comparison(
         "Pointwise - method decoration",
-        eager_result, magi_result, torch_result,
+        eager_result,
+        magi_result,
+        torch_result,
         extra_info=f"shape=({NUM_TOKENS}, {HIDDEN_SIZE})",
     )
     _assert_speedup(magi_vs_eager, eager_result, magi_result, "method")
