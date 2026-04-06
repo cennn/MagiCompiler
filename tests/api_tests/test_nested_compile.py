@@ -71,15 +71,15 @@ def assert_not_torch_compiled_or_disabled(module: nn.Module, msg: str = ""):
 
 
 def assert_magi_compiled(module: nn.Module, msg: str = ""):
-    assert hasattr(module, "_magi"), f"Missing _magi (MagiCompileState). {msg}"
-    state = module._magi
-    assert state is not None, f"_magi is None (compilation disabled). {msg}"
-    assert state.compiled_code is not None, f"compiled_code is None. {msg}"
+    assert hasattr(module, "_magi_state_forward"), f"Missing _magi_state_forward (MagiCompileState). {msg}"
+    state = module._magi_state_forward
+    assert state is not None, f"_magi_state_forward is None (compilation disabled). {msg}"
+    assert state.jit_compiled_code is not None, f"jit_compiled_code is None. {msg}"
 
 
 def assert_not_magi_compiled(module: nn.Module, msg: str = ""):
-    if hasattr(module, "_magi") and module._magi is not None:
-        assert module._magi.compiled_code is None, f"compiled_code should be None. {msg}"
+    if hasattr(module, "_magi_state_forward") and module._magi_state_forward is not None:
+        assert module._magi_state_forward.jit_compiled_code is None, f"jit_compiled_code should be None. {msg}"
 
 
 def assert_torch_disabled(module: nn.Module, msg: str = ""):
@@ -226,8 +226,8 @@ def test_nested_torch_compile_magi_compile():
     x = torch.randn(4, 16, HIDDEN_SIZE, device=DEVICE)
 
     for i, block in enumerate(model.blocks):
-        assert hasattr(block, "_magi_compiled"), f"block {i} should be @magi_compile'd"
-        assert block._magi_compiled is True
+        assert hasattr(block, "_magi_wrapper_installed"), f"block {i} should be @magi_compile'd"
+        assert block._magi_wrapper_installed is True
 
     with torch.no_grad():
         baseline = model(x)
@@ -244,7 +244,7 @@ def test_nested_torch_compile_magi_compile():
         compiled_out = compiled_model(x)
 
     for i, block in enumerate(model.blocks):
-        assert block._magi_compiled is True
+        assert block._magi_wrapper_installed is True
         assert_magi_compiled(block)
 
     assert torch.allclose(baseline, compiled_out, atol=TOLERANCE, rtol=TOLERANCE)

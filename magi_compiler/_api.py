@@ -246,6 +246,11 @@ def _magi_compile_bound_method(
             )
             state = getattr(instance, state_attr, None)
 
+        # Keep first trace on CPU when model_cpu_offload is enabled.
+        if state is not None and state.compile_config.offload_config.model_cpu_offload and state.jit_compiled_code is None:
+            args = offload(args)
+            kwargs = offload(kwargs)
+
         if state is None or torch.compiler.is_compiling():
             return old_method(*args, **kwargs)
 
@@ -329,7 +334,7 @@ def _apply_shape_marks(state: MagiCompileState, args, kwargs):
 
     dynamic_records = _mark_dynamic_shapes(state, bound)
 
-    _mark_static_shapes(bound, dynamic_records)
+    _mark_static_shapes(bound, dynamic_records, owner=state.obj if state.target_method_name else None)
 
 
 def _mark_dynamic_shapes(state: MagiCompileState, bound):
@@ -355,7 +360,7 @@ def _mark_dynamic_shapes(state: MagiCompileState, bound):
     return dynamic_records
 
 
-def _mark_static_shapes(bound, dynamic_records):
+def _mark_static_shapes(bound, dynamic_records, owner=None):
     """
     Mark static dimensions for tensors that are not marked as dynamic,
     dynamic_records is a dictionary that maps the id of the tensor to the set of dynamic dimensions.
@@ -394,6 +399,9 @@ def _mark_static_shapes(bound, dynamic_records):
 
     for arg_val in bound.arguments.values():
         traverse_and_mark(arg_val)
+
+    if owner is not None:
+        traverse_and_mark(owner)
 
 
 @contextmanager
