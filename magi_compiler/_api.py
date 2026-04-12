@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import functools
 import gc
 import inspect
@@ -32,7 +31,7 @@ from magi_compiler.magi_backend.magi_compiler_base import MagiCompileState
 from magi_compiler.utils import compilation_counter, envs, magi_logger
 from magi_compiler.utils.compile_time_monitor import CompileMonitor
 
-from .config import CompileConfig, CompileMode, get_compile_config
+from .config import CompileConfig, CompileMode
 
 
 # =============================================================================
@@ -86,7 +85,7 @@ def _run_orchestration(state: MagiCompileState, args, kwargs):
     Central orchestration logic for magi_compile.
 
     Dispatch order:
-    0. NONE / TORCH_COMPILE — short-circuit before any magi logic.
+    0. TORCH_COMPILE — short-circuit before MAGI-specific logic.
     1. JIT Fast Path: If bytecode is already captured, swap and run.
     2. AOT Fast Path: If AOT artifacts exist, load, swap, and run.
     3. First-time Compilation (MAGI_COMPILE only):
@@ -95,9 +94,6 @@ def _run_orchestration(state: MagiCompileState, args, kwargs):
        - (Optional) Perform AOT compilation and save artifacts.
     """
     compile_mode = state.compile_config.compile_mode
-
-    if compile_mode == CompileMode.NONE:
-        return state.original_entry(*args, **kwargs)
 
     if compile_mode == CompileMode.TORCH_COMPILE:
         if state.compiled_entry is None:
@@ -151,32 +147,16 @@ def _lazy_init_magi_state(
     state_holder: object,
     compile_obj: object,
     dynamic_arg_dims: dict[str, int | list[int]] | None,
-    enable_if: Callable[[], bool] | None,
-    config_patch: Callable[[CompileConfig], CompileConfig],
-    model_tag: str | None,
-    target_method_name: str | None = None,
-    state_attr: str | None = None,
+    conf: CompileConfig,
+    model_tag: str,
+    target_method_name: str | None,
+    state_attr: str,
 ):
-    """Lazily initialize MagiCompileState and attach it on ``state_attr``.
-
-    Always creates a MagiCompileState (never returns early with None).
-    When ``enable_if`` evaluates to False the compile_mode is downgraded
-    to NONE so that ``_run_orchestration`` can short-circuit cleanly.
-    """
-    state_attr = state_attr or get_attr_name_for_state("function")
+    """Lazily initialize MagiCompileState and attach it on ``state_attr``."""
     if getattr(state_holder, state_attr, None) is not None:
         return
 
-    conf = config_patch(copy.deepcopy(get_compile_config()))
-    enable = enable_if is None or enable_if()
-    if not enable:
-        conf.compile_mode = CompileMode.NONE
-
     compilation_counter.num_models_seen += 1
-
-    # Infer default model tag if not provided
-    if model_tag is None:
-        model_tag = getattr(compile_obj, "__name__", compile_obj.__class__.__name__)
 
     setattr(
         state_holder,
@@ -193,14 +173,9 @@ def _lazy_init_magi_state(
 
 
 def _magi_compile_class(
-    cls: type,
-    dynamic_arg_dims: dict[str, int | list[int]],
-    enable_if: Callable[[], bool] | None,
-    config_patch: Callable[[CompileConfig], CompileConfig],
-    model_tag: str | None,
-    method_name: str,
+    cls: type, dynamic_arg_dims: dict[str, int | list[int]], conf: CompileConfig, model_tag: str, method_name: str
 ):
-    """Install class-level lazy compilation for ``method_name``.
+    """Install class-level compilation for ``method_name``.
 
     This wraps ``cls.__init__`` so every new instance is patched by
     ``_magi_compile_bound_method`` after initialization.
@@ -212,7 +187,7 @@ def _magi_compile_class(
     if not callable(getattr(cls, method_name, None)):
         raise AttributeError(f"{cls.__name__} has no callable method '{method_name}'")
 
-    if issubclass(cls, nn.Module) and config_patch(copy.deepcopy(get_compile_config())).offload_config.model_cpu_offload:
+    if issubclass(cls, nn.Module) and conf.offload_config.model_cpu_offload:
         _patch_cpu_offload_apply(cls)
 
     old_init = cls.__init__
@@ -220,7 +195,7 @@ def _magi_compile_class(
     @functools.wraps(old_init)
     def wrapped_init(self, *args, **kwargs):
         old_init(self, *args, **kwargs)
-        _magi_compile_bound_method(self, dynamic_arg_dims, enable_if, config_patch, model_tag, method_name=method_name)
+        _magi_compile_bound_method(self, dynamic_arg_dims, conf, model_tag, method_name=method_name)
 
     cls.__init__ = wrapped_init
     setattr(cls, compile_flag_attr, True)
@@ -228,14 +203,9 @@ def _magi_compile_class(
 
 
 def _magi_compile_bound_method(
-    instance: object,
-    dynamic_arg_dims: dict[str, int | list[int]],
-    enable_if: Callable[[], bool] | None,
-    config_patch: Callable[[CompileConfig], CompileConfig],
-    model_tag: str | None,
-    method_name: str,
+    instance: object, dynamic_arg_dims: dict[str, int | list[int]], conf: CompileConfig, model_tag: str, method_name: str
 ):
-    """Patch one instance method with lazy state initialization and compiled routing."""
+    """Patch one instance method with compiled routing."""
     if not callable(getattr(instance, method_name, None)):
         raise AttributeError(f"{instance.__class__.__name__} instance has no callable method '{method_name}'")
 
@@ -248,11 +218,8 @@ def _magi_compile_bound_method(
     @torch.compiler.disable()
     def new_call(*args, **kwargs):
         state = getattr(instance, state_attr, None)
-
         if state is None:
-            _lazy_init_magi_state(
-                instance, instance, dynamic_arg_dims, enable_if, config_patch, model_tag, method_name, state_attr
-            )
+            _lazy_init_magi_state(instance, instance, dynamic_arg_dims, conf, model_tag, method_name, state_attr)
             state = getattr(instance, state_attr)
 
         if state.compile_config.offload_config.model_cpu_offload and state.jit_compiled_code is None:
@@ -269,30 +236,18 @@ def _magi_compile_bound_method(
     return instance
 
 
-def _magi_compile_function(
-    func: Callable,
-    dynamic_arg_dims: dict[str, int | list[int]],
-    enable_if: Callable[[], bool] | None,
-    config_patch: Callable[[CompileConfig], CompileConfig] | None,
-    model_tag: str | None,
-):
-    """Wrap a function entry with lazy ``MagiCompileState`` and compiled routing.
-
-    The returned wrapper initializes state on first invocation and then dispatches
-    through ``_run_orchestration``.
-    """
+def _magi_compile_function(func: Callable, dynamic_arg_dims: dict[str, int | list[int]], conf: CompileConfig, model_tag: str):
+    """Wrap a function entry with compiled routing."""
     state_attr = get_attr_name_for_state("function")
     if getattr(func, state_attr, None) is not None:
         return func
-
-    config_patch = config_patch or (lambda x: x)
 
     @torch.compiler.disable()
     @functools.wraps(func)  # for the original function name and docstring
     def wrapper(*args, **kwargs):
         state = getattr(wrapper, state_attr, None)
         if state is None:
-            _lazy_init_magi_state(wrapper, func, dynamic_arg_dims, enable_if, config_patch, model_tag, None, state_attr)
+            _lazy_init_magi_state(wrapper, func, dynamic_arg_dims, conf, model_tag, None, state_attr)
             state = getattr(wrapper, state_attr)
 
         if torch.compiler.is_compiling():
