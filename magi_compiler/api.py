@@ -23,10 +23,9 @@ from ._api import (
     _magi_compile_bound_method,
     _magi_compile_class,
     _magi_compile_function,
-    get_compile_config,
 )
 from ._magi_register_custom_op import _magi_register_custom_op_impl
-from .config import CompileConfig, CompileMode
+from .config import CompileConfig, CompileMode, get_compile_config
 
 _T = TypeVar("_T", bound=type)
 _F = TypeVar("_F", bound=Callable)
@@ -131,10 +130,7 @@ def magi_compile(
     config_patch = config_patch or (lambda x: x)
     conf = config_patch(copy.deepcopy(get_compile_config()))
     enable = enable_if is None or enable_if()
-    if not enable:
-        conf.compile_mode = CompileMode.NONE
-
-    if conf.compile_mode == CompileMode.NONE:
+    if not enable or conf.compile_mode == CompileMode.NONE:
         return obj
 
     is_bound_method = inspect.ismethod(obj)
