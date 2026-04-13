@@ -14,16 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Robust PR checkout for self-hosted runners.
+"""Robust PR checkout: tarball (GitHub API) → git-fetch fallback.
 
-Strategy: tarball via GitHub API → git-fetch fallback.
-
-Env vars: REPO_URL, BASE_SHA, HEAD_SHA, GITHUB_TOKEN, GITHUB_REPOSITORY.
+Env: REPO_URL, BASE_SHA, HEAD_SHA, GITHUB_TOKEN, GITHUB_REPOSITORY.
 """
 
 from __future__ import annotations
 
-import glob
+import glob  # noqa: E401
 import os
 import re
 import shutil
@@ -32,9 +30,7 @@ import sys
 import tarfile
 import time
 
-RETRIES = 10
-SLEEP = 5
-
+RETRIES, SLEEP = 10, 5
 REPO_URL = os.environ["REPO_URL"]
 BASE_SHA = os.environ["BASE_SHA"]
 HEAD_SHA = os.environ["HEAD_SHA"]
@@ -46,98 +42,44 @@ def log(msg: str) -> None:
     print(f"[checkout] {msg}", flush=True)
 
 
-def sh(cmd: str, *, check: bool = True, env: dict | None = None) -> int:
-    """Run a shell command, return exit code."""
-    log(f"$ {cmd}")
-    return subprocess.run(cmd, shell=True, check=check, env=env).returncode
+def sh(cmd: str, **kw) -> int:
+    kw.setdefault("check", True)
+    return subprocess.run(cmd, shell=True, **kw).returncode
 
 
-def cleanup_locks() -> None:
-    for f in glob.glob(".git/*.lock"):
-        os.remove(f)
+def env_no_proxy() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k.lower() not in ("http_proxy", "https_proxy")}
 
 
-def no_proxy_env() -> dict[str, str]:
-    env = os.environ.copy()
-    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        env.pop(k, None)
-    return env
+# ── tarball checkout ─────────────────────────────────────────────────
 
 
-# ── Method 1: git fetch ─────────────────────────────────────────────
-
-
-def git_fetch_checkout() -> bool:
-    if sh("git rev-parse --is-inside-work-tree", check=False) != 0:
-        sh("git init .")
-    if sh(f"git remote set-url origin {REPO_URL}", check=False) != 0:
-        sh(f"git remote add origin {REPO_URL}")
-
-    for i in range(1, RETRIES + 1):
-        cleanup_locks()
-        log(f"fetch attempt {i}/{RETRIES}")
-
-        if i % 2 == 1:
-            log("mode=proxy strict")
-            cmd = (
-                f"timeout 120 git -c http.lowSpeedLimit=100 -c http.lowSpeedTime=10"
-                f" fetch --no-tags --prune --depth=1 origin {BASE_SHA} {HEAD_SHA}"
-            )
-            env = None
-        else:
-            log("mode=direct relaxed")
-            cmd = (
-                f"timeout 120 git -c http.proxy= -c https.proxy="
-                f" -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30"
-                f" fetch --no-tags --prune --depth=1 origin {BASE_SHA} {HEAD_SHA}"
-            )
-            env = no_proxy_env()
-
-        if sh(cmd, check=False, env=env) == 0:
-            cleanup_locks()
-            sh(f"git checkout --force {HEAD_SHA}")
-            sh("git clean -fdx")
-            sh(f"git reset --hard {HEAD_SHA}")
-            return True
-
-        if i < RETRIES:
-            cleanup_locks()
-            log(f"retry in {SLEEP}s")
-            time.sleep(SLEEP)
-
-    log("git-fetch failed")
-    return False
-
-
-# ── Method 2: tarball + synthetic git history ────────────────────────
-
-
-def _download(sha: str, dest: str) -> bool:
+def _curl(sha: str, dest: str) -> bool:
     url = f"https://api.github.com/repos/{REPO}/tarball/{sha}"
     for i in range(1, RETRIES + 1):
-        via = "proxy" if i % 2 == 1 else "direct"
+        via = "proxy" if i % 2 else "direct"
         log(f"tarball({sha[:8]}) attempt {i}/{RETRIES} via {via}")
-        curl = [
-            "curl",
-            "-fSL",
-            "--retry",
-            "2",
-            "--retry-delay",
-            "3",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "180",
-            "-H",
-            f"Authorization: Bearer {TOKEN}",
-            "-H",
-            "Accept: application/vnd.github+json",
-            "-o",
-            dest,
-            url,
-        ]
-        env = no_proxy_env() if via == "direct" else None
-        if subprocess.run(curl, check=False, env=env).returncode == 0:
+        rc = subprocess.run(
+            [
+                "curl",
+                "-fSL",
+                "--retry",
+                "2",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "180",
+                "-H",
+                f"Authorization: Bearer {TOKEN}",
+                "-H",
+                "Accept: application/vnd.github+json",
+                "-o",
+                dest,
+                url,
+            ],
+            env=env_no_proxy() if via == "direct" else None,
+        ).returncode
+        if rc == 0:
             return True
         if i < RETRIES:
             time.sleep(SLEEP)
@@ -148,61 +90,75 @@ def _extract(tar_path: str) -> None:
     with tarfile.open(tar_path, "r:gz") as tf:
         prefix = os.path.commonprefix(tf.getnames()).rstrip("/")
         for m in tf.getmembers():
-            if prefix:
-                m.name = m.name[len(prefix) :].lstrip("/")
+            m.name = m.name[len(prefix) :].lstrip("/") if prefix else m.name
             if m.name:
                 tf.extract(m, ".", filter="data")
 
 
-def _commit(msg: str, date: str) -> None:
-    sh("git add -A")
-    env = {**os.environ, "GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date}
-    sh(f'git commit --allow-empty -m "{msg}"', env=env)
-
-
 def tarball_checkout() -> tuple[str, str] | None:
-    """Returns (local_base_sha, local_head_sha) on success, None on failure."""
-    head_tar, base_tar = "/tmp/_head.tar.gz", "/tmp/_base.tar.gz"
-    try:
-        if not _download(HEAD_SHA, head_tar) or not _download(BASE_SHA, base_tar):
-            return None
+    """Download HEAD & BASE tarballs, build synthetic two-commit repo.
 
+    Returns ``(local_base_sha, local_head_sha)`` or ``None``.
+    """
+    h, b = "/tmp/_head.tar.gz", "/tmp/_base.tar.gz"
+    try:
+        if not _curl(HEAD_SHA, h) or not _curl(BASE_SHA, b):
+            return None
         shutil.rmtree(".git", ignore_errors=True)
         sh("git init . && git config user.email ci@sandai.org && git config user.name CI")
-
-        _extract(base_tar)
-        _commit(f"base {BASE_SHA}", "2000-01-01T00:00:00Z")
-
-        sh("git rm -rf .", check=False)
-        _extract(head_tar)
-        _commit(f"head {HEAD_SHA}", "2000-01-02T00:00:00Z")
-
-        base_local = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
-        head_local = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        log(f"synthetic: BASE {BASE_SHA[:8]}→{base_local[:8]}, HEAD {HEAD_SHA[:8]}→{head_local[:8]}")
-        return base_local, head_local
+        for tar, msg, date in [
+            (b, f"base {BASE_SHA}", "2000-01-01T00:00:00Z"),
+            (h, f"head {HEAD_SHA}", "2000-01-02T00:00:00Z"),
+        ]:
+            if tar == h:
+                sh("git rm -rf . 2>/dev/null || true", check=False)
+            _extract(tar)
+            sh("git add -A")
+            env = {**os.environ, "GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date}
+            sh(f'git commit --allow-empty -m "{msg}"', env=env)
+        base_l = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
+        head_l = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        log(f"synthetic: {BASE_SHA[:8]}→{base_l[:8]}, {HEAD_SHA[:8]}→{head_l[:8]}")
+        return base_l, head_l
     finally:
-        for f in (head_tar, base_tar):
+        for f in (h, b):
             try:
                 os.remove(f)
             except FileNotFoundError:
                 pass
 
 
-# ── Main ─────────────────────────────────────────────────────────────
+# ── git-fetch fallback ───────────────────────────────────────────────
 
 
-def _set_output(key: str, value: str) -> None:
-    """Write a key=value pair to $GITHUB_OUTPUT (if available)."""
-    path = os.environ.get("GITHUB_OUTPUT")
-    if path:
-        with open(path, "a") as f:
-            f.write(f"{key}={value}\n")
+def git_fetch_checkout() -> bool:
+    if sh("git rev-parse --is-inside-work-tree", check=False) != 0:
+        sh("git init .")
+    if sh(f"git remote set-url origin {REPO_URL}", check=False) != 0:
+        sh(f"git remote add origin {REPO_URL}")
+    for i in range(1, RETRIES + 1):
+        for f in glob.glob(".git/*.lock"):
+            os.remove(f)
+        log(f"fetch attempt {i}/{RETRIES}")
+        if i % 2:
+            cmd = f"timeout 120 git -c http.lowSpeedLimit=100 -c http.lowSpeedTime=10 fetch --no-tags --prune --depth=1 origin {BASE_SHA} {HEAD_SHA}"
+            env = None
+        else:
+            cmd = f"timeout 120 git -c http.proxy= -c https.proxy= -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 fetch --no-tags --prune --depth=1 origin {BASE_SHA} {HEAD_SHA}"
+            env = env_no_proxy()
+        if sh(cmd, check=False, env=env) == 0:
+            sh(f"git checkout --force {HEAD_SHA} && git clean -fdx && git reset --hard {HEAD_SHA}")
+            return True
+        if i < RETRIES:
+            time.sleep(SLEEP)
+    return False
+
+
+# ── main ─────────────────────────────────────────────────────────────
 
 
 def main() -> None:
     log(f"HEAD={HEAD_SHA}, BASE={BASE_SHA}")
-
     result = tarball_checkout()
     if result:
         base_ref, head_ref = result
@@ -213,9 +169,10 @@ def main() -> None:
     else:
         log("all methods failed")
         sys.exit(1)
-
-    _set_output("base_ref", base_ref)
-    _set_output("head_ref", head_ref)
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as f:
+            f.write(f"base_ref={base_ref}\nhead_ref={head_ref}\n")
     sh(f"git diff --stat {base_ref} {head_ref} | tail -3")
     log("done")
 
