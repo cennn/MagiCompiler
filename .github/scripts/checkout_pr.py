@@ -160,31 +160,27 @@ def _commit(msg: str, date: str) -> None:
     sh(f'git commit --allow-empty -m "{msg}"', env=env)
 
 
-def tarball_checkout() -> bool:
+def tarball_checkout() -> tuple[str, str] | None:
+    """Returns (local_base_sha, local_head_sha) on success, None on failure."""
     head_tar, base_tar = "/tmp/_head.tar.gz", "/tmp/_base.tar.gz"
     try:
         if not _download(HEAD_SHA, head_tar) or not _download(BASE_SHA, base_tar):
-            return False
+            return None
 
         shutil.rmtree(".git", ignore_errors=True)
         sh("git init . && git config user.email ci@sandai.org && git config user.name CI")
 
-        # commit base
         _extract(base_tar)
         _commit(f"base {BASE_SHA}", "2000-01-01T00:00:00Z")
 
-        # commit head
         sh("git rm -rf .", check=False)
         _extract(head_tar)
         _commit(f"head {HEAD_SHA}", "2000-01-02T00:00:00Z")
 
-        # make real SHAs resolvable via git-replace
         base_local = subprocess.check_output(["git", "rev-parse", "HEAD~1"], text=True).strip()
         head_local = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        sh(f"git replace {BASE_SHA} {base_local}", check=False)
-        sh(f"git replace {HEAD_SHA} {head_local}", check=False)
         log(f"synthetic: BASE {BASE_SHA[:8]}→{base_local[:8]}, HEAD {HEAD_SHA[:8]}→{head_local[:8]}")
-        return True
+        return base_local, head_local
     finally:
         for f in (head_tar, base_tar):
             try:
@@ -196,18 +192,31 @@ def tarball_checkout() -> bool:
 # ── Main ─────────────────────────────────────────────────────────────
 
 
+def _set_output(key: str, value: str) -> None:
+    """Write a key=value pair to $GITHUB_OUTPUT (if available)."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a") as f:
+            f.write(f"{key}={value}\n")
+
+
 def main() -> None:
     log(f"HEAD={HEAD_SHA}, BASE={BASE_SHA}")
 
-    if tarball_checkout():
+    result = tarball_checkout()
+    if result:
+        base_ref, head_ref = result
         log("tarball succeeded")
     elif git_fetch_checkout():
+        base_ref, head_ref = BASE_SHA, HEAD_SHA
         log("git-fetch fallback succeeded")
     else:
         log("all methods failed")
         sys.exit(1)
 
-    sh(f"git diff --stat {BASE_SHA} {HEAD_SHA} | tail -3")
+    _set_output("base_ref", base_ref)
+    _set_output("head_ref", head_ref)
+    sh(f"git diff --stat {base_ref} {head_ref} | tail -3")
     log("done")
 
 

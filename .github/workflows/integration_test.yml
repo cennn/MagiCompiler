@@ -37,6 +37,7 @@ jobs:
                 git config --global https.proxy "${{ secrets.HTTPS_PROXY }}"
 
         -   name: Checkout PR head with retry
+            id: checkout
             timeout-minutes: 10
             env:
                 REPO_URL: https://github.com/${{ github.repository }}.git
@@ -71,8 +72,8 @@ jobs:
         -   name: Check Chinese Characters
             run: python3 .github/workflows/check_chinese_chars.py
             env:
-                BASE_REF: ${{ github.event.pull_request.base.sha }}
-                HEAD_REF: ${{ github.event.pull_request.head.sha }}
+                BASE_REF: ${{ steps.checkout.outputs.base_ref || github.event.pull_request.base.sha }}
+                HEAD_REF: ${{ steps.checkout.outputs.head_ref || github.event.pull_request.head.sha }}
 
         -   name: Check Code Style
             run: pre-commit run --show-diff-on-failure --color=always --all-files
