@@ -69,10 +69,9 @@ def no_proxy_env() -> dict[str, str]:
 
 
 def git_fetch_checkout() -> bool:
-    if sh("git rev-parse --is-inside-work-tree", check=False) == 0:
-        sh(f"git remote set-url origin {REPO_URL}", check=False)
-    else:
+    if sh("git rev-parse --is-inside-work-tree", check=False) != 0:
         sh("git init .")
+    if sh(f"git remote set-url origin {REPO_URL}", check=False) != 0:
         sh(f"git remote add origin {REPO_URL}")
 
     for i in range(1, RETRIES + 1):
