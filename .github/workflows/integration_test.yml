@@ -40,71 +40,31 @@ jobs:
             timeout-minutes: 10
             run: |
                 set -euo pipefail
-                repo_url="https://github.com/${{ github.repository }}.git"
-                base_sha="${{ github.event.pull_request.base.sha }}"
-                head_sha="${{ github.event.pull_request.head.sha }}"
 
-                if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-                    git remote set-url origin "$repo_url" 2>/dev/null || git remote add origin "$repo_url"
-                else
-                    git init .
-                    git remote add origin "$repo_url"
-                fi
+                script_path=".github/scripts/checkout_pr.sh"
+                api_url="https://api.github.com/repos/${{ github.repository }}/contents/${script_path}?ref=${{ github.event.pull_request.head.sha }}"
 
-                cleanup_git_locks() {
-                    rm -f .git/shallow.lock \
-                          .git/index.lock \
-                          .git/packed-refs.lock \
-                          .git/FETCH_HEAD.lock \
-                          .git/config.lock
-                }
-
-                for attempt in $(seq 1 15); do
-                    cleanup_git_locks
-                    echo "[checkout] attempt ${attempt}/15"
-
-                    if [ $((attempt % 2)) -eq 1 ]; then
-                        echo "[checkout] mode=proxy strict(lowSpeed=100/10)"
-                        fetch_cmd=(
-                            timeout 1m
-                            git -c http.lowSpeedLimit=100 -c http.lowSpeedTime=10
-                            fetch --no-tags --prune --depth=1 origin
-                            "$base_sha" "$head_sha"
-                        )
-                    else
-                        echo "[checkout] mode=direct relaxed(lowSpeed=1/30)"
-                        fetch_cmd=(
-                            env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY
-                            timeout 1m
-                            git -c http.proxy= -c https.proxy= -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30
-                            fetch --no-tags --prune --depth=1 origin
-                            "$base_sha" "$head_sha"
-                        )
-                    fi
-
-                    if "${fetch_cmd[@]}"; then
+                mkdir -p .github/scripts
+                for attempt in $(seq 1 10); do
+                    echo "[checkout-bootstrap] download script attempt ${attempt}/10"
+                    if curl -fsSL \
+                        -H "Authorization: Bearer ${{ github.token }}" \
+                        -H "Accept: application/vnd.github.raw" \
+                        "$api_url" -o "$script_path"; then
                         break
                     fi
-
-                    if [ "$attempt" -eq 15 ]; then
-                        echo "[checkout] failed after 15 attempts"
+                    if [ "$attempt" -eq 10 ]; then
+                        echo "[checkout-bootstrap] failed to download checkout script"
                         exit 1
                     fi
-
-                    cleanup_git_locks
-                    echo "[checkout] fetch timeout/failure, retry in 5s"
-                    sleep 5
+                    sleep 3
                 done
 
-                cleanup_git_locks
-                git checkout --force "$head_sha"
-                git clean -fdx
-                git reset --hard "$head_sha"
-                git rev-parse "$base_sha"
-                git rev-parse "$head_sha"
-                git log -1 --oneline
-                git diff --name-only "$base_sha".."$head_sha" | head -n 20
-                echo "[checkout] done"
+                chmod +x "$script_path"
+                REPO_URL="https://github.com/${{ github.repository }}.git" \
+                BASE_SHA="${{ github.event.pull_request.base.sha }}" \
+                HEAD_SHA="${{ github.event.pull_request.head.sha }}" \
+                bash "$script_path"
 
         -   name: Check Chinese Characters
             run: python3 .github/workflows/check_chinese_chars.py
