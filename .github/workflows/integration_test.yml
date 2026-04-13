@@ -61,7 +61,7 @@ jobs:
                     cleanup_git_locks
                     echo "[checkout] attempt ${attempt}/15"
 
-                    if [ "$attempt" -le 8 ]; then
+                    if [ $((attempt % 2)) -eq 1 ]; then
                         echo "[checkout] mode=proxy strict(lowSpeed=100/10)"
                         fetch_cmd=(
                             timeout 1m
