@@ -42,8 +42,12 @@ jobs:
                 set -euo pipefail
                 repo_url="https://github.com/${{ github.repository }}.git"
 
-                git init .
-                git remote add origin "$repo_url"
+                if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+                    git remote set-url origin "$repo_url" 2>/dev/null || git remote add origin "$repo_url"
+                else
+                    git init .
+                    git remote add origin "$repo_url"
+                fi
 
                 for attempt in $(seq 1 15); do
                     echo "[checkout] attempt ${attempt}/15"
