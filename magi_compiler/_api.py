@@ -314,6 +314,18 @@ def _mark_dynamic_shapes(state: MagiCompileState, bound):
 
         final_dims = [arg.ndim + d if d < 0 else d for d in dims]
 
+        for d in final_dims:
+            dim_size = arg.shape[d]
+            if dim_size <= 1:
+                raise ValueError(
+                    f"Argument '{k}' has size {dim_size} on dynamic dim {d}. "
+                    "PyTorch Dynamo specializes on 0/1 sizes (see "
+                    "https://docs.pytorch.org/docs/stable/user_guide/torch_compiler/compile/"
+                    "dynamic_shapes_zero_one_specialization.html), "
+                    "so this dimension will NOT be treated as dynamic. "
+                    "Use an initial input with size >= 2 on dynamic dims to enable shape generalization."
+                )
+
         torch._dynamo.mark_dynamic(arg, final_dims)
 
         dynamic_records[id(arg)] = set(final_dims)

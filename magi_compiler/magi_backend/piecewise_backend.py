@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import torch.fx as fx
 
 from magi_compiler.config import CompileConfig
+from magi_compiler.utils import magi_logger
 
 if TYPE_CHECKING:
     from .magi_backend import CompilerManager
@@ -85,7 +86,9 @@ class PiecewiseBackend:
             self.check_for_ending_compilation()
             return self.compiled_graph_for_general_shape(*args)
 
-        assert len(self.sym_shape_indices) != 0, "No symbolic shape indices found"
+        if len(self.sym_shape_indices) == 0:
+            magi_logger.info("No symbolic shape indices found, falling back to general shape compiled graph")
+            return self.compiled_graph_for_general_shape(*args)
         runtime_shape = args[self.sym_shape_indices[0]]
         if runtime_shape not in self.concrete_size_entries:
             # we don't need to do anything for this shape

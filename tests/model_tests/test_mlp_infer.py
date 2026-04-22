@@ -46,6 +46,16 @@ def test_mlp_basic_inference(device, mlp_config, mlp_model):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA support")
+def test_mlp_batch1_first_call_raises(device, mlp_config, mlp_model):
+    """First call with batch=1 should raise ValueError due to zero-one specialization"""
+    input_tensor = torch.randn(1, mlp_config.hidden_size, device=device, dtype=torch.bfloat16)
+
+    with torch.no_grad():
+        with pytest.raises(ValueError, match="specializes on 0/1 sizes"):
+            mlp_model(input_tensor)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA support")
 def test_mlp_different_input_shapes(device, mlp_config, mlp_model):
     """Test different input shapes"""
     test_shapes = [
