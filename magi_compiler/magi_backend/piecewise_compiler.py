@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import re
 from abc import abstractmethod
 from collections.abc import Callable
@@ -37,6 +38,78 @@ def _summarize_compile_input(value: Any) -> str:
     if isinstance(value, torch.SymInt):
         return f"SymInt({value})"
     return type(value).__name__
+
+
+@contextlib.contextmanager
+def _scope_deferred_runtime_asserts(example_inputs: list[Any]):
+    """Temporarily narrow ``deferred_runtime_asserts`` to only those whose
+    backed symbols are reachable from the current piecewise sub-graph's inputs.
+
+    Inductor's ``GraphLowering`` copies the *entire*
+    ``shape_env.deferred_runtime_asserts`` dict and later emits each assert as
+    a Python statement referencing the symbol name.  When ``standalone_compile``
+    is called with ``from_tracing_context`` on a piecewise sub-graph, the
+    shared ``ShapeEnv`` may contain asserts that reference backed SymInts
+    absent from this sub-graph's placeholders (e.g. ``s90``), causing a
+    ``NameError`` at runtime.
+
+    This context manager scopes the dict for the duration of
+    ``standalone_compile`` and restores the original afterwards so subsequent
+    sub-graphs see the full set.
+    """
+    import sympy
+    from torch._subclasses.fake_tensor import FakeTensor
+    from torch.fx.experimental.symbolic_shapes import SymTypes, free_unbacked_symbols
+
+    context = torch._guards.TracingContext.try_get()
+    if context is None or context.fake_mode is None:
+        yield
+        return
+    shape_env = context.fake_mode.shape_env
+    if not shape_env.deferred_runtime_asserts:
+        yield
+        return
+
+    # Collect all backed symbols reachable from this sub-graph's inputs.
+    # e.g. sub-graph inputs: x(s77, 64), u0, u1, u2 → reachable = {s77}
+    reachable: set[sympy.Symbol] = set()
+    for inp in example_inputs:
+        if isinstance(inp, SymTypes):
+            # SymInt input, e.g. unbacked u0 → {u0}
+            reachable |= inp.node.expr.free_symbols
+        elif isinstance(inp, torch.Tensor):
+            if isinstance(inp, FakeTensor):
+                for s in inp.shape:
+                    if isinstance(s, torch.SymInt):
+                        # Tensor dim, e.g. x.shape[0] = s77 → {s77}
+                        reachable |= s.node.expr.free_symbols
+
+    # Filter: keep only asserts whose backed symbols all exist in this sub-graph.
+    # e.g. Eq(u0+u1+u2, s77): backed={s77} ⊆ {s77} → keep
+    #      Eq(u0+u1+u2, s90): backed={s90} ⊄ {s77} → drop (s90 is in another sub-graph)
+    original: dict[sympy.Symbol, list[sympy.Expr]] = shape_env.deferred_runtime_asserts
+    filtered: dict[sympy.Symbol, list[sympy.Expr]] = {}
+    for sym, ras in original.items():
+        kept: list[sympy.Expr] = []
+        for ra in ras:
+            # all_symbols - unbacked_symbols = backed symbols only
+            backed_in_expr = ra.expr.free_symbols - free_unbacked_symbols(ra.expr)
+            if backed_in_expr <= reachable:
+                kept.append(ra)
+            else:
+                magi_logger.debug(
+                    "Filtering unreachable deferred assert for sub-graph: " "sym=%s expr=%s missing=%s",
+                    sym,
+                    ra.expr,
+                    backed_in_expr - reachable,
+                )
+        if kept:
+            filtered[sym] = kept
+    shape_env.deferred_runtime_asserts = filtered
+    try:
+        yield
+    finally:
+        shape_env.deferred_runtime_asserts = original
 
 
 def _read_generated_code_expected_arity(path: str) -> int | None:
@@ -199,8 +272,14 @@ class InductorStandaloneAdaptor(CompilerInterface):
         import torch._functorch.config as functorch_config
         from torch._inductor import standalone_compile
 
+        scope_asserts = (
+            _scope_deferred_runtime_asserts(example_inputs)
+            if dynamic_shapes == "from_tracing_context"
+            else contextlib.nullcontext()
+        )
+
         try:
-            with functorch_config.patch(autograd_cache_allow_custom_autograd_functions=True):
+            with scope_asserts, functorch_config.patch(autograd_cache_allow_custom_autograd_functions=True):
                 compiled_graph = standalone_compile(
                     graph, example_inputs, dynamic_shapes=dynamic_shapes, options={"config_patches": current_config}
                 )
