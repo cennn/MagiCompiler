@@ -356,7 +356,9 @@ class InductorStandaloneAdaptor(CompilerInterface):
                 compilation_counter.num_compiled_artifacts_saved += 1
                 return compiled_graph, CacheHandle(key, path.as_posix(), restart_analysis_count)
             except Exception as e:
-                magi_logger.warning("Failed to save compiled artifact for key '%s', skipping cache: %s", key, e)
+                magi_logger.warning(
+                    "Failed to save compiled artifact for key '%s', skipping cache: %s: %s", key, type(e).__name__, e
+                )
 
         return compiled_graph, None
 

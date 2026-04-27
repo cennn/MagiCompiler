@@ -16,6 +16,14 @@ Two failure modes:
    entry so ``save_to_file`` does not re-serialize ghost paths — this is not a
    ``graph_index`` mismatch; index and ``artifact_shape_*_subgraph_{i}`` keys
    are always built from the same ``graph_index`` in ``compile()``.
+
+3. ``initialize_cache`` must reset in-memory ``self.cache`` every time it
+   binds to a directory, not only when ``subgraph_indices.py`` exists; otherwise
+   a second ``MagiBackend.__call__`` can keep ghost handles.  When the index file
+   is still missing for the **same** ``cache_dir``, ``_remaining_restart_skips``
+   must also be cleared; when the file exists and the directory is unchanged,
+   skips must **persist** across ``initialize_cache`` so a second Dynamo
+   ``__call__`` can hit disk after the first call consumed RestartAnalysis skips.
 """
 
 from __future__ import annotations
@@ -27,7 +35,7 @@ import torch
 import torch.fx as fx
 
 from magi_compiler.config import CompileConfig
-from magi_compiler.magi_backend._cache_data_cls import CacheEntry
+from magi_compiler.magi_backend._cache_data_cls import CacheEntry, CacheHandle
 from magi_compiler.magi_backend.magi_backend import CompilerManager
 
 
@@ -91,6 +99,28 @@ def test_maybe_store_cache_entry_removes_stale_when_handle_is_none(tmp_path: Pat
     assert entry in cm.cache
 
     cm._maybe_store_cache_entry(entry, None, None, "artifact_shape_None_subgraph_0")
+
+    assert entry not in cm.cache
+    assert 0 not in cm._remaining_restart_skips
+
+
+def test_initialize_cache_clears_stale_memory_when_indices_file_absent(tmp_path: Path) -> None:
+    """Re-init same cache_dir without subgraph_indices.py must not keep partial in-memory handles."""
+    cache_dir = tmp_path / "rebind"
+    cache_dir.mkdir(parents=True)
+
+    cfg = CompileConfig(cache_root_dir=str(tmp_path))
+    cm = CompilerManager(cfg)
+    cm.initialize_cache(cache_dir)
+
+    bogus = cache_dir / "artifact_shape_None_subgraph_0"
+    entry = CacheEntry(None, 0, "inductor_standalone")
+    cm.cache[entry] = CacheHandle("artifact_shape_None_subgraph_0", str(bogus), 1)
+    cm._remaining_restart_skips[0] = 1
+
+    assert not (cache_dir / "subgraph_indices.py").exists()
+
+    cm.initialize_cache(cache_dir)
 
     assert entry not in cm.cache
     assert 0 not in cm._remaining_restart_skips

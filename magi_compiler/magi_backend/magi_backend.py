@@ -118,6 +118,20 @@ class CompilerManager:
         for multiple prefixes, they can share the same base cache dir of
         /path/to/magi_cache/model_{idx}[_{tag}]_rank_{rank}/hash_str/ to store some
         common compilation artifacts.
+
+        In-memory ``self.cache`` is always reset when (re)binding to ``cache_dir``,
+        then repopulated from ``subgraph_indices.py`` only if that file exists.
+        Otherwise a second ``MagiBackend.__call__`` (e.g. after Dynamo
+        ``RestartAnalysis``) could reuse a ``CompilerManager`` whose dict still
+        held handles from a partial first attempt that never reached
+        ``save_to_file()`` — producing indices without matching artifact dirs.
+
+        ``_remaining_restart_skips`` is only cleared when the cache directory
+        changes or when ``subgraph_indices.py`` is absent.  If we cleared it on
+        every ``initialize_cache`` while reloading the same on-disk index file,
+        Dynamo's second ``__call__`` would re-apply full ``restart_analysis``
+        skips and never reach a disk ``load`` hit (regresses
+        ``test_restart_analysis_cache``).
         """
 
         self.cache_dir: Path = cache_dir
@@ -129,12 +143,21 @@ class CompilerManager:
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         magi_logger.info("Using cache directory: %s for MagiCompiler", cache_dir)
-        if self.cache_file_path.exists():
+
+        prev_dir = getattr(self, "_last_initialized_cache_dir", None)
+        indices_exists = self.cache_file_path.exists()
+        same_dir = prev_dir is not None and prev_dir == cache_dir
+        if not same_dir or not indices_exists:
+            self._remaining_restart_skips.clear()
+
+        self.cache = {}
+        self._last_initialized_cache_dir = cache_dir
+
+        if indices_exists:
             # load the cache from the file
             with self.cache_file_path.open() as f:
                 # Parse Python literals using ast.literal_eval, which is a safe alternative to eval().
                 raw = ast.literal_eval(f.read())
-                self.cache = {}
                 for entry, handle in raw.items():
                     cache_entry = CacheEntry(*entry)
                     cache_handle = CacheHandle(*handle)
