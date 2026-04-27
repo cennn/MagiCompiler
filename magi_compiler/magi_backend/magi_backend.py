@@ -14,6 +14,7 @@
 
 import ast
 import dataclasses
+import os
 import pprint
 import time
 from collections.abc import Callable
@@ -160,6 +161,18 @@ class CompilerManager:
             return None
 
         cache_handle = self.cache[cache_entry]
+        artifact_path = cache_handle.path
+        if not artifact_path or not os.path.isdir(artifact_path):
+            magi_logger.warning(
+                "dropping stale cache entry (missing artifact dir): graph_index=%s key=%s path=%s",
+                cache_entry.graph_index,
+                cache_handle.key,
+                artifact_path,
+            )
+            del self.cache[cache_entry]
+            self._remaining_restart_skips.pop(cache_entry.graph_index, None)
+            return None
+
         if cache_entry.graph_index not in self._remaining_restart_skips:
             self._remaining_restart_skips[cache_entry.graph_index] = cache_handle.restart_analysis_count
         remaining = self._remaining_restart_skips[cache_entry.graph_index]

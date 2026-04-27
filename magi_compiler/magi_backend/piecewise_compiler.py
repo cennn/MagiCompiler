@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import os
 import re
 from abc import abstractmethod
 from collections.abc import Callable
@@ -364,6 +365,14 @@ class InductorStandaloneAdaptor(CompilerInterface):
     ) -> Callable | None:
         assert isinstance(cache_handle.key, str) and cache_handle.key is not None
         assert isinstance(cache_handle.path, str) and cache_handle.path is not None
+
+        if not os.path.isdir(cache_handle.path):
+            magi_logger.warning(
+                "skip artifact load: compiled artifact path missing or not a directory: key=%s path=%s",
+                cache_handle.key,
+                cache_handle.path,
+            )
+            return None
 
         expected_arity = _read_generated_code_expected_arity(cache_handle.path)
         actual_arity = len(example_inputs)
