@@ -237,6 +237,20 @@ class CompilerManager:
         if self.disable_cache:
             return False
         if cache_handle is None:
+            # Inductor compile succeeded but we did not persist an artifact (save failure,
+            # missing cache_dir, etc.).  Drop any stale handle rehydrated from
+            # ``subgraph_indices.py`` so ``save_to_file()`` cannot re-serialize a path that
+            # was never written — the classic ``restart_analysis_count>0`` + missing
+            # ``artifact_shape_*_subgraph_0`` directory failure mode.
+            if cache_entry in self.cache:
+                magi_logger.warning(
+                    "removing cache entry after compile with no persisted artifact: " "graph_index=%s runtime_shape=%s key=%s",
+                    cache_entry.graph_index,
+                    cache_entry.runtime_shape,
+                    key,
+                )
+                del self.cache[cache_entry]
+                self._remaining_restart_skips.pop(cache_entry.graph_index, None)
             return False
 
         prev_handle = self.cache.get(cache_entry)
