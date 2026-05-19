@@ -206,38 +206,36 @@ def magi_register_custom_op(
     """
     A unified decorator to register a custom operator with PyTorch's library.
 
-    This decorator combines the functionality of:
+    It supports advanced features like frozen-dataclass param and combines the
+    functionality of:
     - @torch.library.custom_op
     - @torch.library.register_fake
-    - fn.register_autograd
+    - @torch.library.register_autograd
+    and extends it to support nested dataclass parameters.
 
     Arguments:
-        name: The fully qualified name of the operator (e.g., "namespace::op_name").
-              If None, auto-generated from the function name and source file.
-        mutates_args: Tuple of argument names that are mutated by the operator.
-        infer_output_meta_fn: Specifies output tensor metadata (shape, dtype, device) for tracing.
-            - None (default): Assumes each output has the same metadata as the corresponding
-              input tensor (1st output matches 1st tensor input, 2nd matches 2nd, etc.).
-            - list[str]: Parameter names whose metadata to use for outputs.
-              E.g., ["weight", "bias"] means output[0] has same shape as `weight`,
-              output[1] has same shape as `bias`.
-            - Callable: Custom function with same signature as the op, returns torch.empty_like()
-              tensors matching the expected output shapes.
+        name: Fully qualified op name (e.g. ``"namespace::op_name"``). If
+            ``None``, auto-generated from the function's source file and name.
+        mutates_args: Argument names that the op mutates.
+        infer_output_meta_fn: How to propagate output metadata at trace time.
+            - ``None`` (default): output ``i`` copies the ``i``-th tensor input.
+            - ``list[str]``: parameter names whose metadata to copy. E.g.
+              ``["weight", "bias"]`` makes ``output[0]`` shape-match ``weight``
+              and ``output[1]`` shape-match ``bias``.
+            - ``Callable``: a function with the same signature as the op that
+              returns ``torch.empty_like(...)`` tensors of the expected shapes.
         setup_context_fn: Function to save tensors/values for backward.
             Signature: setup_context_fn(ctx, inputs, output)
-        backward_fn: Function to compute gradients.
-            Signature: backward_fn(ctx, *grad_outputs) -> tuple of gradients
-        is_compute_sensitive: If True, marks this operator as compute-intensive (e.g., MatMul,
-            Attention). During activation recomputation (rematerialization), outputs of
-            compute-sensitive ops are prioritized for saving rather than recomputing,
-            since recomputing them would be expensive.
-        is_subgraph_boundary: If True, the FX graph will be split at this operator during
-            compilation. Each sub-graph between boundary operators is compiled independently
-            by Inductor, enabling piecewise compilation and more flexible scheduling
-            (e.g., for CPU offloading or overlapping computation with data transfer).
+        backward_fn: Gradient computation; signature
+            ``backward_fn(ctx, *grad_outputs) -> tuple of grads``.
+        is_compute_sensitive: marks this operator as compute-intensive (e.g.,
+            MatMul, Attention). During training, outputs of compute-sensitive
+            ops are prioritised for saving rather than recomputing.
+        is_subgraph_boundary: Split the FX graph at this op during compilation.
+            Each sub-graph between boundary ops is compiled independently.
 
     Returns:
-        The registered custom operator function.
+        A callable with the user's original signature.
 
     Examples:
         1. Basic usage (forward only, auto-generated name and meta function):
@@ -248,9 +246,7 @@ def magi_register_custom_op(
 
         2. Multiple outputs with explicit output metadata via parameter names:
 
-        >>> @magi_register_custom_op(
-        ...     infer_output_meta_fn=["weight", "bias"],  # output shapes match weight and bias
-        ... )
+        >>> @magi_register_custom_op(infer_output_meta_fn=["weight", "bias"])
         ... def compute_gradients(
         ...     grad_output: torch.Tensor,
         ...     weight: torch.Tensor,
@@ -260,27 +256,54 @@ def magi_register_custom_op(
         ...     grad_bias = grad_output.sum(dim=0).view_as(bias)
         ...     return grad_weight, grad_bias
 
-        3. Full custom op with autograd support:
+        3. Frozen-dataclass parameter (grouped config):
 
-        >>> def _square_meta(x: torch.Tensor) -> torch.Tensor:
-        ...     return torch.empty_like(x)
+        ... @dataclasses.dataclass(frozen=True)
+        ... class AttnCfg:
+        ...     scale: float
+        ...     causal: bool = False
         ...
-        >>> def _square_setup_context(ctx, inputs, output):
-        ...     (x,) = inputs
-        ...     ctx.save_for_backward(x)
+        >>> @magi_register_custom_op()
+        ... def attn(q: torch.Tensor, k: torch.Tensor, cfg: AttnCfg) -> torch.Tensor:
+        ...     pass
+
+        4. Backward with a nested-dataclass input (per-field grads by field name):
+
+        For a dataclass input slot, the easiest way to express per-field
+        grads is to return a ``dict`` keyed by field name (nested for
+        nested dataclasses). Tensor fields carry their grads; non-
+        differentiable fields (or absent keys) use ``None``. The bridge
+        matches by field **name** (not by type), so any object exposing
+        the same names works; ``dict`` is just the most convenient.
+
+        ... @dataclasses.dataclass(frozen=True)
+        ... class Inner:
+        ...     w: torch.Tensor
+        ...     b: torch.Tensor
         ...
-        >>> def _square_backward(ctx, grad_output):
-        ...     (x,) = ctx.saved_tensors
-        ...     return grad_output * 2 * x
+        ... @dataclasses.dataclass(frozen=True)
+        ... class WeightCfg:
+        ...     inner: Inner
+        ...     scale: float
         ...
-        >>> @magi_register_custom_op(
-        ...     name="my_ops::square",
-        ...     infer_output_meta_fn=_square_meta,
-        ...     setup_context_fn=_square_setup_context,
-        ...     backward_fn=_square_backward,
-        ... )
-        ... def square(x: torch.Tensor) -> torch.Tensor:
-        ...     return x * x
+        ... def setup(ctx, inputs, output):
+        ...     x, cfg = inputs
+        ...     ctx.save_for_backward(x, cfg.inner.w)
+        ...     ctx.scale = cfg.scale
+        ...
+        ... def bwd(ctx, gy):
+        ...     x, w = ctx.saved_tensors
+        ...     s = ctx.scale
+        ...     # Slot order matches the ORIGINAL signature of ``op`` below.
+        ...     return (
+        ...         gy * w * s,                                         # grad for x   (Tensor)
+        ...         {"inner": {"w": gy * x * s, "b": None}, "scale": None},  # grad for cfg (nested dict)
+        ...         # equivalently: WeightCfg(inner=Inner(w=gy * x * s, b=None), scale=None)
+        ...     )
+        ...
+        >>> @magi_register_custom_op(setup_context_fn=setup, backward_fn=bwd)
+        ... def op(x: torch.Tensor, cfg: WeightCfg) -> torch.Tensor:
+        ...     return (x * cfg.inner.w + cfg.inner.b) * cfg.scale
     """
     return _magi_register_custom_op_impl(
         name=name,
