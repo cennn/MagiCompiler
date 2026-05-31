@@ -106,6 +106,18 @@ pip install -r requirements.txt
 # Step 4 — Install MagiCompiler (pick one)
 pip install .   # End users (recommended)
 # pip install -e . --no-build-isolation --config-settings editable_mode=compat  # Developer / editable
+
+# Step 5 (optional) — Install CUTLASS for matmul epilogue fusion
+# Required for the CUTLASS-based matmul + epilogue fusion pass (sm_90 / sm_120).
+# Without CUTLASS the compiler still works but skips this optimization.
+git clone --depth 1 https://github.com/NVIDIA/cutlass.git /usr/local/cutlass
+# Or specify a custom path:
+#   git clone --depth 1 https://github.com/NVIDIA/cutlass.git /your/path
+#   export MAGI_CUTLASS_ROOT=/your/path
+export CUDACXX=${CUDA_INSTALL_PATH}/bin/nvcc
+mkdir /usr/local/cutlass/build && cd /usr/local/cutlass/build
+cmake .. -DCUTLASS_NVCC_ARCHS=90a # compiles for NVIDIA Hopper GPU architecture
+# cmake .. -DCUTLASS_NVCC_ARCHS=120a # compiles for NVIDIA consumer Blackwell (RTX 50 series)
 ```
 
 ---
