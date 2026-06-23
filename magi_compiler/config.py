@@ -70,6 +70,17 @@ class PassConfig(BaseModel):
             "Env var: MAGI_COMPILE_PASS_CONFIG__ENABLE_SAGE_ATTN (1/0/true/false)."
         ),
     )
+    enable_conv_channels_last: bool = Field(
+        True,
+        description=(
+            "Forces channels-last (NHWC/NDHWC) inputs/weights at conv boundaries "
+            "so cuDNN can select faster layout-optimized kernels. "
+            "True (default): register and let its internal heuristics decide whether to "
+            "apply (currently: static shapes AND conv-heavy graphs). "
+            "False: do not register the pass at all. "
+            "Env var: MAGI_COMPILE_PASS_CONFIG__ENABLE_CONV_CHANNELS_LAST (1/0/true/false)."
+        ),
+    )
     enable_nd_tiling_workaround: bool = Field(
         True,
         description=(
@@ -91,7 +102,7 @@ class PassConfig(BaseModel):
             "TMA + WGMMA DualGemm. The pass is a no-op on older architectures "
             "regardless of this flag, but the flag still controls whether it "
             "is registered at all. "
-            "Env var: MAGI_COMPILE_PASS_CONFIG__ENABLE_MM_EPILOGUE_FUSION (1/0/true/false)."
+            "Settable via the MAGI_COMPILE_PASS_CONFIG__ENABLE_MM_EPILOGUE_FUSION env var."
         ),
     )
 
