@@ -523,6 +523,8 @@ class MagiBackend:
 
         self.inductor_compile_config[post_grad_key] = post_grad_pass_manager
 
+        post_grad_pass_manager.snapshot_original_inductor_configs(self.inductor_compile_config)
+
     def _init_cache(self) -> str:
         hash_key = compute_hash(
             [

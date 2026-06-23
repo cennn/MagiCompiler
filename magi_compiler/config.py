@@ -63,7 +63,24 @@ class PassConfig(BaseModel):
     # TODO: Add no-op elimination pass.
     # TODO: Add sequence parallelism pass and async TP pass.
     # TODO: Add Ulysses overlap pass.
-    enable_sage_attn: bool = Field(False, description="Whether to replace flash attention with sage attention.")
+    enable_sage_attn: bool = Field(
+        False,
+        description=(
+            "Whether to replace flash attention with sage attention. "
+            "Env var: MAGI_COMPILE_PASS_CONFIG__ENABLE_SAGE_ATTN (1/0/true/false)."
+        ),
+    )
+    enable_nd_tiling_workaround: bool = Field(
+        True,
+        description=(
+            "Triton ND-tiling workaround (prefer_nd_tiling + max_tiles=3 + tile_reductions) "
+            "for Inductor's coalesce tiling bailing out under dynamic shapes. "
+            "True (default): register the pass and let its internal heuristics decide whether to "
+            "apply (currently: torch < 2.11.0 AND dynamic shapes AND conv-heavy). "
+            "False: do not register the pass at all. "
+            "Env var: MAGI_COMPILE_PASS_CONFIG__ENABLE_ND_TILING_WORKAROUND (1/0/true/false)."
+        ),
+    )
     enable_mm_epilogue_fusion: bool = Field(
         False,
         description=(
@@ -73,7 +90,8 @@ class PassConfig(BaseModel):
             "(sm_90) the swiglu sub-path additionally uses the native Sm90 "
             "TMA + WGMMA DualGemm. The pass is a no-op on older architectures "
             "regardless of this flag, but the flag still controls whether it "
-            "is registered at all."
+            "is registered at all. "
+            "Env var: MAGI_COMPILE_PASS_CONFIG__ENABLE_MM_EPILOGUE_FUSION (1/0/true/false)."
         ),
     )
 
@@ -171,6 +189,10 @@ class CompileConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="MAGI_COMPILE_",
+        # Nested sub-configs (e.g. pass_config, offload_config) are reachable via
+        # ``MAGI_COMPILE_<SUBCONFIG>__<FIELD>`` env vars, e.g.
+        # ``MAGI_COMPILE_PASS_CONFIG__ENABLE_ND_TILING_WORKAROUND=1``.
+        env_nested_delimiter="__",
         populate_by_name=True,
         cli_parse_args=True,
         cli_ignore_unknown_args=True,
