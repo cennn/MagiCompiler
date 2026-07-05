@@ -1,0 +1,10 @@
+ablog
+babel==2.18.0
+myst_parser
+pydata-sphinx-theme
+sphinx
+sphinx-copybutton
+sphinx-intl
+sphinx-subfigure
+sphinx_design
+sphinxcontrib-bibtex
