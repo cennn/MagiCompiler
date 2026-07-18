@@ -542,13 +542,73 @@ class MagiBackend:
         self.local_magi_cache_path.mkdir(parents=True, exist_ok=True)
         self.compiler_manager.initialize_cache(self.local_magi_cache_path)
 
+    def _apply_fsdp_fullgraph_overlap(self, graph: fx.GraphModule) -> None:
+        """Whole-graph FSDP all-gather / compute overlap (disable_graph_split path).
+
+        1. Lower SimpleFSDP weight prim_redistribute -> explicit collectives and
+           optionally bucket them over the whole graph (no region partitioning;
+           buckets break only at dtype changes and the size cap).
+        2. Install the profiling runtime estimator at ``config.estimate_op_runtime``
+           (the analytical roofline is unusable for our sizing decisions).
+        3. Install the latest-safe-launch reorder pass, REPLACING PyTorch's builtin
+           raise_comms/sink_waits, and enable reorder_for_compute_comm_overlap.
+        """
+        fsdp_cfg = self.compile_config.fsdp_config
+        assert (
+            self.compile_config.disable_graph_split
+        ), "fsdp_config.enable_fullgraph_overlap requires disable_graph_split=True"
+        assert (
+            self.compile_config.cudagraph_mode == CudaGraphMode.NONE
+        ), "fsdp_config.enable_fullgraph_overlap requires cudagraph_mode=NONE"
+
+        from magi_compiler.passes.fsdp_overlap import FsdpOverlapReorder, lower_and_bucket_full_graph
+        from magi_compiler.profiling import ProfilingRuntimeEstimator
+
+        bucket_size_bytes = int(fsdp_cfg.bucket_size_mib) * 1024 * 1024
+        n_buckets = lower_and_bucket_full_graph(graph, fsdp_cfg.bucket_mode, bucket_size_bytes=bucket_size_bytes)
+        magi_logger.info(
+            "FSDP fullgraph overlap: bucket_mode=%s bucket_size=%d MiB created %d buckets",
+            fsdp_cfg.bucket_mode,
+            fsdp_cfg.bucket_size_mib,
+            n_buckets,
+        )
+
+        if fsdp_cfg.cost_mode == "analytical":
+            self._fsdp_overlap_estimator = None
+            cost_fn = None  # reorder pass defaults to Inductor's analytical estimate
+        else:  # "profile_sync" -- the default for BOTH single- and multi-rank
+            self._fsdp_overlap_estimator = ProfilingRuntimeEstimator()
+            self._fsdp_overlap_estimator._sync_across_ranks = True
+            cost_fn = self._fsdp_overlap_estimator
+
+        reorder = FsdpOverlapReorder(
+            comm_overlap_window_margin_ns=fsdp_cfg.comm_overlap_window_margin_ns,
+            cost_fn=cost_fn,
+            comm_overlap_window_scale=fsdp_cfg.comm_overlap_window_scale,
+        )
+        self.inductor_compile_config["reorder_for_compute_comm_overlap"] = True
+        self.inductor_compile_config["reorder_for_compute_comm_overlap_passes"] = [reorder]
+
     @observe_lifecycle("graph_split")
     def _split_graph(self, graph: fx.GraphModule) -> tuple[fx.GraphModule, list[SplitItem]]:
-        # Step 1: resolve the splitting ops
-        fx_split_ops = self.compile_config.splitting_ops or []
+        # Step 1: resolve the splitting ops.
+        if self.compile_config.disable_graph_split:
+            assert (
+                self.compile_config.cudagraph_mode != CudaGraphMode.PIECEWISE
+            ), "disable_graph_split is incompatible with cudagraph_mode=PIECEWISE"
+            fx_split_ops = []
+            magi_logger.info(
+                "disable_graph_split=True: skipping FX-level graph split; compiling the whole graph as one submod"
+            )
+        else:
+            fx_split_ops = self.compile_config.splitting_ops or []
         resolved_ops: list[torch._ops.OpOverload] = resolve_defined_ops(fx_split_ops)
         magi_logger.info(f"Setting up FX-level graph split with ops: {fx_split_ops=}")
         magi_logger.info(f"Resolved splitting ops for FX-level graph split: {resolved_ops=}")
+
+        # Step 1.4: whole-graph FSDP overlap.
+        if self.compile_config.fsdp_config.enable_fsdp:
+            self._apply_fsdp_fullgraph_overlap(graph)
 
         # Step 2: split graph by ops, we split graph based on resolved_ops, which becomes the partitioned single graph.
         subgraph_id = 0

@@ -182,6 +182,64 @@ class OffloadConfig(BaseModel):
     bandwidth_safety_factor: float = Field(0.9, description="The safety factor for the H2D bandwidth.")
 
 
+class FSDPConfig(BaseModel):
+    """Whole-graph FSDP weight all-gather / compute overlap (SimpleFSDP models
+    compiled with ``disable_graph_split=True``).
+    """
+
+    enable_fsdp: bool = Field(
+        False,
+        description=(
+            "Lower SimpleFSDP weight prim_redistribute to explicit collectives, bucket them (bucket_mode), "
+            "and install the latest-safe-launch reorder pass that hoists each all-gather launch just far "
+            "enough upstream for compute to hide it. Requires disable_graph_split=True and cudagraph_mode=NONE."
+        ),
+    )
+    bucket_mode: str = Field(
+        "none",
+        description=(
+            "'none' = one all_gather + wait per weight; 'coalesced' = one all_gather_into_tensor_coalesced "
+            "per bucket (single launch, N getitems/waits). Buckets are whole-graph, broken only by "
+            "program-order dtype changes and the bucket_size_mib cap."
+        ),
+    )
+    bucket_size_mib: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Per-bucket cap on accumulated local-shard MiB for coalesced bucketing. 0 = no cap "
+            "(one bucket per (group, dtype) run)."
+        ),
+    )
+    cost_mode: Literal["profile_sync", "analytical"] = Field(
+        "profile_sync",
+        description=(
+            "Cost model for the reorder placement; must be rank-identical multi-rank (else NCCL deadlock). "
+            "'profile_sync' (default): real per-op profiling, re-measured in rank-lockstep and max-reduced; "
+            "requires structurally identical per-rank graphs (verified at runtime, degrades safely on "
+            "mismatch). 'analytical': Inductor roofline -- rank-deterministic, less accurate, deadlock-free "
+            "fallback."
+        ),
+    )
+    comm_overlap_window_margin_ns: float = Field(
+        5000.0,
+        ge=0.0,
+        description=(
+            "Extra headroom (ns) added to each collective's runtime when sizing its compute window, "
+            "absorbing estimator error + launch latency."
+        ),
+    )
+    comm_overlap_window_scale: float = Field(
+        1.5,
+        ge=1.0,
+        description=(
+            "Multiplier on each collective's estimated runtime when sizing its compute window "
+            "(need = comm * scale + margin): collectives are measured in isolation but run concurrent "
+            "with the compute that hides them (~1.4-1.5x slower in-situ on 8xH100)."
+        ),
+    )
+
+
 def _find_cutlass_root() -> str:
     """Return the CUTLASS source root, or empty string if not found."""
     path = os.environ.get("MAGI_CUTLASS_ROOT", "/usr/local/cutlass")
@@ -261,6 +319,21 @@ class CompileConfig(BaseSettings):
         description=(
             "Custom operator names at which the FX graph is split into piecewise sub-graphs. "
             "Each sub-graph between two splitting ops is compiled independently by Inductor."
+        ),
+    )
+    disable_graph_split: bool = Field(
+        False,
+        description=(
+            "Skip FX-level splitting at the custom subgraph-boundary ops (splitting_ops) and hand the "
+            "WHOLE graph to Inductor as a single piecewise submodule."
+        ),
+    )
+    # ---- Whole-graph FSDP overlap ----
+    fsdp_config: FSDPConfig = Field(
+        FSDPConfig(),
+        description=(
+            "Whole-graph FSDP weight all-gather / compute overlap (lowering + bucketing + reorder + cost "
+            "model). Fields reachable via MAGI_COMPILE_FSDP_CONFIG__<FIELD> env vars."
         ),
     )
 
